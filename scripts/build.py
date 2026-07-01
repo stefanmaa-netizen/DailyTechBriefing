@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Baut docs/index.html mit den aktuellen Top KI/Tech-Meldungen von der
-oeffentlichen, keyless Hacker-News-API (news.ycombinator.com).
+oeffentlichen, keyless Hacker-News-API (news.ycombinator.com), sowie
+ITSM-Meldungen vom itsm.tools RSS-Feed.
 Wird taeglich per GitHub Actions ausgefuehrt (siehe .github/workflows/daily-briefing.yml).
 """
 import html
@@ -9,12 +10,17 @@ import json
 import re
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 HN_TOP = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM = "https://hacker-news.firebaseio.com/v0/item/{}.json"
 MAX_CANDIDATES = 120
 MAX_RESULTS = 8
+
+ITSM_FEED = "https://itsm.tools/feed/"
+ITSM_MAX_RESULTS = 5
 
 KEYWORDS = re.compile(
     r"\b(ai|a\.i\.|gpt|llm|openai|anthropic|claude|gemini|deepmind|nvidia|chip|"
@@ -47,18 +53,61 @@ def collect_items():
     return items[:MAX_RESULTS]
 
 
-def render_card(item):
-    title = html.escape(item["title"])
-    url = html.escape(item["url"])
-    score = item.get("score", 0)
-    domain = urllib.parse.urlparse(item["url"]).hostname or ""
+def fetch_text(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "ki-tech-briefing-bot"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.read()
+
+
+def collect_itsm_items():
+    try:
+        raw = fetch_text(ITSM_FEED)
+        root = ET.fromstring(raw)
+    except Exception:
+        return []
+
+    items = []
+    for entry in root.findall("./channel/item"):
+        title_el = entry.find("title")
+        link_el = entry.find("link")
+        pubdate_el = entry.find("pubDate")
+        title = (title_el.text or "").strip() if title_el is not None else ""
+        url = (link_el.text or "").strip() if link_el is not None else ""
+        if not title or not url:
+            continue
+
+        badge = "ITSM"
+        if pubdate_el is not None and pubdate_el.text:
+            try:
+                badge = parsedate_to_datetime(pubdate_el.text.strip()).strftime("%d.%m.")
+            except Exception:
+                pass
+
+        items.append({"title": title, "url": url, "badge": badge})
+        if len(items) >= ITSM_MAX_RESULTS:
+            break
+    return items
+
+
+def render_card(title, url, badge):
+    domain = urllib.parse.urlparse(url).hostname or ""
     domain = re.sub(r"^www\.", "", domain)
+    title_esc = html.escape(title)
+    url_esc = html.escape(url)
     return f"""
         <div class="card">
-          <span class="badge">{score} Punkte</span>
-          <h2>{title}</h2>
-          <a class="source" href="{url}" target="_blank" rel="noopener">{html.escape(domain)} &rarr;</a>
+          <span class="badge">{html.escape(str(badge))}</span>
+          <h2>{title_esc}</h2>
+          <a class="source" href="{url_esc}" target="_blank" rel="noopener">{html.escape(domain)} &rarr;</a>
         </div>"""
+
+
+def render_hn_card(item):
+    return render_card(item["title"], item["url"], f"{item.get('score', 0)} Punkte")
+
+
+def render_itsm_card(item):
+    return render_card(item["title"], item["url"], item["badge"])
 
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -130,9 +179,13 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   <div id="live-status"></div>
   <div id="live-briefing"></div>
 
+  <div class="section-label">IT Service Management</div>
+  <div id="itsm-briefing">{itsm_cards}</div>
+
   <footer>
     Automatisch generiert von GitHub Actions, taeglich gegen 6 Uhr MESZ.<br>
-    Quelle: oeffentliche Hacker-News-API (news.ycombinator.com), gefiltert nach KI/Tech-Stichwoertern.
+    Quelle: oeffentliche Hacker-News-API (news.ycombinator.com), gefiltert nach KI/Tech-Stichwoertern.<br>
+    ITSM-Meldungen: itsm.tools (RSS-Feed), einmal taeglich serverseitig aktualisiert.
   </footer>
 </main>
 
@@ -184,12 +237,16 @@ document.getElementById('refresh').addEventListener('click', loadLive);
 
 def main():
     items = collect_items()
-    cards = "".join(render_card(it) for it in items) or "<p>Keine passenden Meldungen gefunden.</p>"
+    cards = "".join(render_hn_card(it) for it in items) or "<p>Keine passenden Meldungen gefunden.</p>"
+
+    itsm_items = collect_itsm_items()
+    itsm_cards = "".join(render_itsm_card(it) for it in itsm_items) or "<p>Keine passenden Meldungen gefunden.</p>"
+
     stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y, %H:%M")
-    html_out = PAGE_TEMPLATE.format(cards=cards, stamp=stamp)
+    html_out = PAGE_TEMPLATE.format(cards=cards, stamp=stamp, itsm_cards=itsm_cards)
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print(f"Wrote docs/index.html with {len(items)} items.")
+    print(f"Wrote docs/index.html with {len(items)} AI/Tech items and {len(itsm_items)} ITSM items.")
 
 
 if __name__ == "__main__":
