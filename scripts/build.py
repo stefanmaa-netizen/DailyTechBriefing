@@ -140,7 +140,29 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   header h1 {{ margin: 0; font-size: 22px; letter-spacing: -0.02em; }}
   header h1 span {{ color: var(--accent2); }}
   #date {{ color: var(--muted); font-size: 13px; margin-top: 4px; }}
+  #overview {{ color: var(--muted); font-size: 12.5px; margin-top: 2px; }}
   main {{ padding: 16px; max-width: 640px; margin: 0 auto; }}
+  .tabs {{
+    position: relative; display: flex; background: var(--card);
+    border: 1px solid var(--card-border); border-radius: 999px;
+    padding: 4px; margin-bottom: 18px;
+  }}
+  .tab-thumb {{
+    position: absolute; top: 4px; bottom: 4px; left: 4px;
+    width: calc(50% - 4px); background: var(--accent); border-radius: 999px;
+    transition: transform 0.28s cubic-bezier(.4,0,.2,1); z-index: 0;
+  }}
+  .tab {{
+    position: relative; z-index: 1; flex: 1; border: none; background: transparent;
+    color: var(--muted); font-size: 13.5px; font-weight: 600; padding: 10px 8px;
+    border-radius: 999px; cursor: pointer; transition: color 0.2s ease;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }}
+  .tab.active {{ color: #fff; }}
+  .tab .count {{ font-size: 10.5px; opacity: 0.75; }}
+  .panel {{ display: none; }}
+  .panel.active {{ display: block; animation: fadeIn 0.25s ease; }}
+  @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: translateY(0); }} }}
   .card {{
     background: var(--card); border: 1px solid var(--card-border);
     border-radius: 14px; padding: 16px 18px; margin-bottom: 12px;
@@ -169,18 +191,27 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <header>
   <h1>KI<span>/</span>Tech-Briefing</h1>
   <div id="date">Automatisch aktualisiert: {stamp} Uhr (UTC)</div>
+  <div id="overview">{count_ai} KI/Tech &middot; {count_itsm} ITSM Meldungen</div>
 </header>
 
 <main>
-  <div class="section-label">Top-Meldungen von heute</div>
-  <div id="static-briefing">{cards}</div>
+  <div class="tabs" id="tabs">
+    <div class="tab-thumb" id="tab-thumb"></div>
+    <button class="tab active" id="tab-ai">KI/Tech <span class="count">{count_ai}</span></button>
+    <button class="tab" id="tab-itsm">ITSM <span class="count">{count_itsm}</span></button>
+  </div>
 
-  <button id="refresh">Jetzt manuell nachladen</button>
-  <div id="live-status"></div>
-  <div id="live-briefing"></div>
+  <section class="panel active" id="panel-ai">
+    <div id="static-briefing">{cards}</div>
 
-  <div class="section-label">IT Service Management</div>
-  <div id="itsm-briefing">{itsm_cards}</div>
+    <button id="refresh">Jetzt manuell nachladen</button>
+    <div id="live-status"></div>
+    <div id="live-briefing"></div>
+  </section>
+
+  <section class="panel" id="panel-itsm">
+    <div id="itsm-briefing">{itsm_cards}</div>
+  </section>
 
   <footer>
     Automatisch generiert von GitHub Actions, taeglich gegen 6 Uhr MESZ.<br>
@@ -190,6 +221,23 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </main>
 
 <script>
+function selectTab(name) {{
+  const isAi = name === 'ai';
+  document.getElementById('tab-thumb').style.transform = isAi ? 'translateX(0)' : 'translateX(100%)';
+  document.getElementById('tab-ai').classList.toggle('active', isAi);
+  document.getElementById('tab-itsm').classList.toggle('active', !isAi);
+  document.getElementById('panel-ai').classList.toggle('active', isAi);
+  document.getElementById('panel-itsm').classList.toggle('active', !isAi);
+  try {{ localStorage.setItem('briefing-tab', name); }} catch (e) {{}}
+}}
+document.getElementById('tab-ai').addEventListener('click', () => selectTab('ai'));
+document.getElementById('tab-itsm').addEventListener('click', () => selectTab('itsm'));
+(function initTab() {{
+  let saved = 'ai';
+  try {{ saved = localStorage.getItem('briefing-tab') || 'ai'; }} catch (e) {{}}
+  if (saved === 'itsm') selectTab('itsm');
+}})();
+
 const KEYWORDS = /\\b(ai|a\\.i\\.|gpt|llm|openai|anthropic|claude|gemini|deepmind|nvidia|chip|semiconductor|robot|chatbot|machine learning|neural|model|quantum|startup|apple|google|meta|microsoft|amazon|spacex|tesla|app store|iphone|android|software|cyber|data center|datacenter)\\b/i;
 
 async function loadLive() {{
@@ -243,7 +291,10 @@ def main():
     itsm_cards = "".join(render_itsm_card(it) for it in itsm_items) or "<p>Keine passenden Meldungen gefunden.</p>"
 
     stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y, %H:%M")
-    html_out = PAGE_TEMPLATE.format(cards=cards, stamp=stamp, itsm_cards=itsm_cards)
+    html_out = PAGE_TEMPLATE.format(
+        cards=cards, stamp=stamp, itsm_cards=itsm_cards,
+        count_ai=len(items), count_itsm=len(itsm_items),
+    )
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html_out)
     print(f"Wrote docs/index.html with {len(items)} AI/Tech items and {len(itsm_items)} ITSM items.")
